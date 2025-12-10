@@ -1,4 +1,3 @@
-import { Card } from "@/components/ui/card";
 import { Upload, ScanSearch, MessageSquare } from "lucide-react";
 
 const steps = [

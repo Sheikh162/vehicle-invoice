@@ -10,11 +10,8 @@ const prisma = new PrismaClient({
   adapter,
 });
 
-// Define the data for Users and their Vehicles
 const userData: Prisma.UserCreateInput[] = [
   {
-    // IMPORTANT: Replace this with your ACTUAL Clerk User ID from the Clerk Dashboard
-    // if you want to see this data when you log in.
     clerkId: "user_36Yn5VsWurCzfVUjgvua1dhBTAA", 
     email: "sheikhabdullah.aka@gmail.com",
     vehicles: {
