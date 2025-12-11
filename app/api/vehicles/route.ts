@@ -1,30 +1,30 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { auth } from '@clerk/nextjs/server';
+import { checkUser } from '@/lib/checkUser';
 
-// Helper to get Internal User ID
+// FIX: Helper should strictly return string or null
 async function getInternalUserId() {
-  const { userId: clerkUserId } = await auth();
-  if (!clerkUserId) return null;
+  const user = await checkUser(); 
 
-  const user = await prisma.user.findUnique({
-    where: { clerkId: clerkUserId },
-    select: { id: true },
-  });
+  if (!user) {
+      return null; // Return null, not a Response object
+  }
 
-  return user?.id || null;
+  return user.id;
 }
 
 // 1. GET: List all vehicles for the Dashboard
 export async function GET() {
   try {
     const internalUserId = await getInternalUserId();
+    
+    // Check if ID is null. If so, return the error response here.
     if (!internalUserId) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const vehicles = await prisma.vehicle.findMany({
-      where: { userId: internalUserId },
+      where: { userId: internalUserId }, // Now TypeScript knows this is a string
       orderBy: { createdAt: 'desc' },
     });
     
@@ -39,6 +39,7 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const internalUserId = await getInternalUserId();
+    
     if (!internalUserId) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -46,18 +47,16 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { make, model, regNumber } = body;
 
-    // Simple validation
     if (!make || !model || !regNumber) {
         return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // Create Record
     const newVehicle = await prisma.vehicle.create({
       data: {
         make,
         model,
         regNumber,
-        userId: internalUserId,
+        userId: internalUserId, // internalUserId is strictly a string here
       },
     });
 
@@ -66,7 +65,6 @@ export async function POST(req: Request) {
   } catch (error: any) {
     console.error('POST /vehicles error:', error);
     
-    // Handle unique constraint violation (Duplicate Reg Number)
     if (error.code === 'P2002') {
         return NextResponse.json({ error: "A vehicle with this Registration Number already exists." }, { status: 409 });
     }

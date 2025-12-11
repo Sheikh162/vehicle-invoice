@@ -3,19 +3,25 @@ import prisma from '@/lib/prisma';
 import { auth } from '@clerk/nextjs/server';
 import OpenAI from 'openai';
 import {PDFParse} from 'pdf-parse'; // Import the parser
+import { checkUser } from '@/lib/checkUser';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function POST(req: Request) {
   try {
-    const { userId: clerkUserId } = await auth();
-    if (!clerkUserId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // const { userId: clerkUserId } = await auth();
+    // if (!clerkUserId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const user = await prisma.user.findUnique({
-        where: { clerkId: clerkUserId },
-        select: { id: true },
-    });
-    if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    // const user = await prisma.user.findUnique({
+    //     where: { clerkId: clerkUserId },
+    //     select: { id: true },
+    // });
+    // if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    const user = await checkUser(); 
+
+    if (!user) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const internalUserId = user.id;
 
     const body = await req.json();
