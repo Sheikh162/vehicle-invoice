@@ -1,28 +1,17 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { auth } from '@clerk/nextjs/server';
-import OpenAI from 'openai';
-import {PDFParse} from 'pdf-parse'; // Import the parser
 import { checkUser } from '@/lib/checkUser';
+import OpenAI from 'openai';
+import { pdfToPng } from 'pdf-to-png-converter';
+
+export const maxDuration = 60;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function POST(req: Request) {
   try {
-    // const { userId: clerkUserId } = await auth();
-    // if (!clerkUserId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    // const user = await prisma.user.findUnique({
-    //     where: { clerkId: clerkUserId },
-    //     select: { id: true },
-    // });
-    // if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
-    const user = await checkUser(); 
-
-    if (!user) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    const internalUserId = user.id;
+    const user = await checkUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
     const { fileUrl, vehicleId } = body;
@@ -31,90 +20,118 @@ export async function POST(req: Request) {
 
     console.log("Analyzing File:", fileUrl);
 
-    const isPdf = fileUrl.toLowerCase().endsWith('.pdf');
-    let aiResponseContent = "";
+    // Fetch the file buffer
+    const res = await fetch(fileUrl);
+    if (!res.ok) throw new Error("Failed to download file");
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
 
-    if (isPdf) {
-        console.log("Detected PDF. Extracting text...");
-        const res = await fetch(fileUrl);
-        const arrayBuffer = await res.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
+    let base64Image = "";
+    let mimeType = "image/png";
+
+    const isPdfHeader = buffer.toString('utf-8', 0, 4) === '%PDF';
+    const isPdfExt = fileUrl.toLowerCase().includes('.pdf');
+
+    if (isPdfHeader || isPdfExt) {
+        console.log("PDF detected. Converting to Image (Plan B)...");
         
-        const pdfData = new PDFParse({url: fileUrl})
-        const extractedText = await pdfData.getText()
+        try {
+            const pngPages = await pdfToPng(buffer as any, { 
+                disableFontFace: true, 
+                useSystemFonts: false,
+                viewportScale: 2.0,    
+            });
 
-        const response = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-                {
-                    role: "system",
-                    content: `You are an expert vehicle service invoice auditor. Extract valid JSON from the provided invoice text.
-                    JSON Structure:
-                    {
-                      "serviceDate": "ISO Date String",
-                      "serviceCenter": "Name of the shop",
-                      "totalCost": Number,
-                      "lineItems": [
-                        { "description": "Item Name", "quantity": Number, "unitPrice": Number, "totalPrice": Number, "category": "Part" or "Labor" }
-                      ]
-                    }`
-                },
-                { role: "user", content: extractedText.text }
-            ],
-            response_format: { type: "json_object" }
-        });
-        aiResponseContent = response.choices[0].message.content || "";
-    } 
-    
-    else {
-        console.log("Detected Image. Using GPT-4o Vision...");
-        const response = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-                {
-                    role: "user",
-                    content: [
-                        { 
-                            type: "text", 
-                            text: `Extract valid JSON from this invoice image.
-                            Structure:
-                            {
-                              "serviceDate": "ISO Date String",
-                              "serviceCenter": "Name of the shop",
-                              "totalCost": Number,
-                              "lineItems": [
-                                { "description": "Item Name", "quantity": Number, "unitPrice": Number, "totalPrice": Number, "category": "Part" or "Labor" }
-                              ]
-                            }` 
-                        },
-                        { type: "image_url", image_url: { url: fileUrl } }
-                    ],
-                },
-            ],
-            response_format: { type: "json_object" },
-        });
-        aiResponseContent = response.choices[0].message.content || "";
+            if (pngPages.length === 0) {
+                throw new Error("PDF conversion returned 0 pages");
+            }
+
+            if (!pngPages[0].content) {
+                throw new Error("PDF conversion succeeded but returned no image content");
+            }
+
+            base64Image = pngPages[0].content.toString('base64');
+            
+        } catch (convError: any) {
+            console.error("PDF Conversion Failed:", convError);
+            throw new Error(`Failed to convert PDF: ${convError.message}`);
+        }
+    } else {
+        console.log("Image detected. Using original buffer.");
+        base64Image = buffer.toString('base64');
+        
+        if (fileUrl.toLowerCase().includes('.jpg') || fileUrl.toLowerCase().includes('.jpeg')) {
+            mimeType = "image/jpeg";
+        } else if (fileUrl.toLowerCase().includes('.webp')) {
+            mimeType = "image/webp";
+        } else if (fileUrl.toLowerCase().includes('.gif')) {
+            mimeType = "image/gif";
+        }
     }
 
-    if (!aiResponseContent) throw new Error("No content from OpenAI");
+    console.log(`Sending to OpenAI (${mimeType}). Base64 Length: ${base64Image.length}`);
 
-    // save to db
-    const extractedData = JSON.parse(aiResponseContent);
+    if (!base64Image || base64Image.length < 100) {
+        throw new Error("Image data is invalid or empty");
+    }
+
+    const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+            {
+                role: "user",
+                content: [
+                    { 
+                        type: "text", 
+                        text: `You are an expert vehicle service invoice auditor. 
+                        Extract the following fields from this invoice image strictly as JSON:
+                        {
+                          "serviceDate": "ISO Date String (YYYY-MM-DD)",
+                          "serviceCenter": "Name of the shop",
+                          "totalCost": Number (numeric only),
+                          "lineItems": [
+                            { "description": "Item Name", "quantity": Number, "unitPrice": Number, "totalPrice": Number, "category": "Part" or "Labor" }
+                          ]
+                        }
+                        Do not return markdown formatting (no \`\`\`json). Just the raw JSON string.` 
+                    },
+                    { 
+                        type: "image_url", 
+                        image_url: { 
+                            url: `data:${mimeType};base64,${base64Image}` 
+                        } 
+                    }
+                ],
+            },
+        ],
+    });
+
+    const aiContent = response.choices[0].message.content || "{}";
+    const cleanJson = aiContent.replace(/```json/g, "").replace(/```/g, "").trim();
     
+    let extractedData;
+    try {
+        extractedData = JSON.parse(cleanJson);
+    } catch (e) {
+        console.error("JSON Parse Error:", cleanJson);
+        throw new Error("AI returned invalid JSON");
+    }
+
+    // Save to Database
     const invoice = await prisma.invoice.create({
       data: {
-        userId: internalUserId,
+        userId: user.id,
         vehicleId,
         fileUrl,
         serviceDate: new Date(extractedData.serviceDate || new Date()),
         serviceCenter: extractedData.serviceCenter || "Unknown Center",
-        totalCost: extractedData.totalCost || 0,
+        totalCost: Number(extractedData.totalCost) || 0,
         lineItems: {
-          create: extractedData.lineItems.map((item: any) => ({
+          create: (extractedData.lineItems || []).map((item: any) => ({
              description: item.description,
-             quantity: item.quantity || 1,
-             unitPrice: item.unitPrice || 0,
-             totalPrice: item.totalPrice || 0,
+             quantity: Number(item.quantity) || 1,
+             unitPrice: Number(item.unitPrice) || 0,
+             totalPrice: Number(item.totalPrice) || 0,
              category: item.category || "Part"
           }))
         }
@@ -123,8 +140,8 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ invoiceId: invoice.id });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error("Analyze Error:", error);
-    return NextResponse.json({ error: "Analysis Failed" }, { status: 500 });
+    return NextResponse.json({ error: error.message || "Analysis Failed" }, { status: 500 });
   }
 }

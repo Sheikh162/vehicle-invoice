@@ -8,9 +8,9 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Send, Loader2 } from 'lucide-react';
 import axios from 'axios';
+import Markdown from 'react-markdown'
 
 export default function InvoiceChatPage({ params }: { params: Promise<{ id: string }> }) {
-  // 1. Unwrap the params properly
   const { id: invoiceId } = use(params);
 
   const [messages, setMessages] = useState([
@@ -62,39 +62,8 @@ export default function InvoiceChatPage({ params }: { params: Promise<{ id: stri
     <div className="container mx-auto py-4 h-[calc(100vh-80px)] flex flex-col">
       <PageHeader title="Invoice Verification" />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-full pb-4">
+      <div className="grid grid-cols-1 lg:grid-cols-1 gap-6 h-full pb-4">
 
-        {/* LEFT: Viewer */}
-        <Card className="h-full flex flex-col overflow-hidden border-2">
-          <CardHeader className="py-3 border-b">
-            <CardTitle className="text-md">Original Invoice</CardTitle>
-          </CardHeader>
-          <div className="flex-1 bg-gray-100 flex items-center justify-center relative overflow-auto p-4">
-            
-            {loadingPdf && <Loader2 className="h-8 w-8 animate-spin" />}
-            
-            {!loadingPdf && invoiceUrl && (
-              <>
-                {/* Simple check: If it ends in .pdf, use iframe. Otherwise, use img */}
-                {invoiceUrl.toLowerCase().endsWith('.pdf') ? (
-                    <iframe 
-                      src={invoiceUrl} 
-                      className="w-full h-full border-none"
-                      title="Invoice PDF"
-                    />
-                ) : (
-                    <img 
-                      src={invoiceUrl} 
-                      alt="Invoice" 
-                      className="max-w-full max-h-full object-contain shadow-md"
-                    />
-                )}
-              </>
-            )}
-          </div>
-        </Card>
-
-        {/* RIGHT: Chat Interface */}
         <Card className="h-full flex flex-col border-2 shadow-lg">
           <CardHeader className="py-3 border-b">
             <CardTitle className="text-md">AI Assistant</CardTitle>
@@ -110,10 +79,18 @@ export default function InvoiceChatPage({ params }: { params: Promise<{ id: stri
                         ? 'bg-blue-600 text-white' 
                         : 'bg-gray-100 text-gray-800'
                     }`}>
-                      {msg.content}
+                      <Markdown 
+                        components={{
+                          ul: ({node, ...props}) => <ul className="list-disc pl-4 space-y-1" {...props} />,
+                          ol: ({node, ...props}) => <ol className="list-decimal pl-4 space-y-1" {...props} />
+                        }}
+                      >
+                        {msg.content}
+                      </Markdown>
                     </div>
                   </div>
                 ))}
+
               </div>
             </ScrollArea>
 
