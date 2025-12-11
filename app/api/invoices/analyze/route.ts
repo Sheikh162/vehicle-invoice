@@ -1,10 +1,10 @@
+export const maxDuration = 60;
+
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { checkUser } from '@/lib/checkUser';
 import OpenAI from 'openai';
 import { pdfToPng } from 'pdf-to-png-converter';
-
-export const maxDuration = 60;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
