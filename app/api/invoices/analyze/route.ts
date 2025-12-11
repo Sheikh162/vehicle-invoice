@@ -37,7 +37,7 @@ export async function POST(req: Request) {
         
         try {
             const pngPages = await pdfToPng(buffer as any, { 
-                disableFontFace: true, 
+                disableFontFace: false, 
                 useSystemFonts: false,
                 viewportScale: 2.0,    
             });
