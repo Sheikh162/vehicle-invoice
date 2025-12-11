@@ -1,10 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // 1. Force Vercel to keep these packages intact (do not bundle)
-  serverExternalPackages: ["pdf-to-png-converter", "canvas", "pdfjs-dist"],
+  // Critical: Tells Vercel to treat these as external packages so binaries are preserved
+  serverExternalPackages: ["pdf-to-png-converter"], 
   
-  // 2. Allow images from UploadThing
   images: {
     remotePatterns: [
       {
