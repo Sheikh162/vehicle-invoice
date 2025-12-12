@@ -1,56 +1,115 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { checkUser } from '@/lib/checkUser';
 import OpenAI from 'openai';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function POST(req: Request) {
   try {
-    const { invoiceId, messages } = await req.json();
-    // Convert 'ai' role from frontend to 'assistant' for OpenAI
-    const formattedMessages = messages.map((msg: any) => ({
-      role: msg.role === 'ai' ? 'assistant' : msg.role,
-      content: msg.content
-    }));
-    // 1. Fetch Context
+    const user = await checkUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const { invoiceId, message } = await req.json();
+
+    if (!invoiceId || !message) {
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    // 1. Fetch Context (Invoice + Previous Messages)
     const invoice = await prisma.invoice.findUnique({
       where: { id: invoiceId },
-      include: { lineItems: true }
+      include: { 
+        lineItems: true,
+        messages: { orderBy: { createdAt: 'asc' } } 
+      }
     });
 
     if (!invoice) return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
 
-    // 2. Construct System Context
-    const systemPrompt = `
-    You are an AI auditor for vehicle service bills.
-    Here is the invoice data you are analyzing:
-    - Service Center: ${invoice.serviceCenter}
-    - Total Cost: ${invoice.totalCost}
-    - Date: ${invoice.serviceDate}
-    - Line Items: ${JSON.stringify(invoice.lineItems)}
+    // 2. Save User Message to DB
+    await prisma.message.create({
+      data: {
+        role: 'user',
+        content: message,
+        invoiceId
+      }
+    });
 
-    Answer the user's questions based on this data. 
-    If they ask if a price is fair, compare it to general market knowledge for standard cars.
-    Be concise and helpful.
-    `;
+    // 3. Prepare Prompt Context
+    const conversationHistory = invoice.messages.map(msg => ({
+      role: msg.role as "user" | "assistant",
+      content: msg.content
+    }));
 
-    // 3. Call OpenAI
+    // Add current message
+    conversationHistory.push({ role: "user", content: message });
+
+    // 4. Call OpenAI with JSON Mode
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
+      response_format: { type: "json_object" }, // <--- Critical for structured output
       messages: [
-        { role: "system", content: systemPrompt },
-        ...formattedMessages 
+        {
+          role: "system",
+          content: `You are an expert vehicle service invoice auditor.
+          
+          INVOICE CONTEXT:
+          - Shop: ${invoice.serviceCenter}
+          - Date: ${invoice.serviceDate}
+          - Total: ${invoice.totalCost}
+          - Items: ${JSON.stringify(invoice.lineItems)}
+
+          YOUR TASK:
+          Answer the user's question accurately based on the invoice data.
+          
+          OUTPUT FORMAT:
+          Return strictly valid JSON:
+          {
+            "answer": "Your response here (use Markdown for bolding key numbers)",
+            "followUpQuestions": [
+               "Short question 1?",
+               "Short question 2?",
+               "Short question 3?"
+            ]
+          }
+
+          GUIDELINES:
+          - The "answer" should be helpful and direct.
+          - "followUpQuestions" should be 3 specific questions relevant to the invoice (e.g., about high-cost items, labor rates, or warranty).
+          `
+        },
+        ...conversationHistory
       ]
     });
 
-    // Return 'ai' role to frontend to keep your UI consistent
-    return NextResponse.json({ 
-      role: 'ai', // You can keep sending 'ai' back if your frontend expects it
-      content: response.choices[0].message.content 
+    const aiContentRaw = response.choices[0].message.content || "{}";
+    let aiParsed;
+    
+    try {
+        aiParsed = JSON.parse(aiContentRaw);
+    } catch (e) {
+        // Fallback if AI fails JSON (rare with json_object mode)
+        aiParsed = { 
+            answer: aiContentRaw, 
+            followUpQuestions: [] 
+        };
+    }
+
+    // 5. Save AI Message to DB
+    const savedAiMsg = await prisma.message.create({
+      data: {
+        role: 'assistant',
+        content: aiParsed.answer || "I processed your request.",
+        suggestedQuestions: aiParsed.followUpQuestions || [],
+        invoiceId
+      }
     });
+
+    return NextResponse.json(savedAiMsg);
 
   } catch (error) {
     console.error("Chat Error:", error);
-    return NextResponse.json({ error: "Chat Failed" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to generate response" }, { status: 500 });
   }
 }

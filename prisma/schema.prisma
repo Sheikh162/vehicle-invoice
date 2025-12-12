@@ -45,6 +45,8 @@ model Invoice {
   
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  messages      Message[]
 }
 
 model LineItem {
@@ -57,4 +59,18 @@ model LineItem {
   
   invoiceId   String
   invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  role      String   // "user" or "assistant"
+  content   String   // The main text response
+  
+  // Optional: Store follow-up questions separately for easy UI rendering
+  suggestedQuestions String[] @default([]) 
+
+  createdAt DateTime @default(now())
+  
+  invoiceId String
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 }
