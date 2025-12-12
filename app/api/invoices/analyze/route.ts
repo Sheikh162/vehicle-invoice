@@ -1,12 +1,13 @@
-export const maxDuration = 60;
+export const maxDuration = 60; 
 
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { checkUser } from '@/lib/checkUser';
 import OpenAI from 'openai';
-import { pdfToPng } from 'pdf-to-png-converter';
+import ConvertApi from 'convertapi';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const convertapi = new ConvertApi(process.env.CONVERT_API_SECRET as string);
 
 export async function POST(req: Request) {
   try {
@@ -14,66 +15,64 @@ export async function POST(req: Request) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { fileUrl, vehicleId } = body;
+    console.log("RECEIVED BODY:", body); 
+    const { fileUrl, vehicleId, fileName } = body;
 
     if (!vehicleId) return NextResponse.json({ error: "Vehicle ID required" }, { status: 400 });
 
-    console.log("Analyzing File:", fileUrl);
+    console.log("Analyzing:", fileName || fileUrl);
 
-    // Fetch the file buffer
-    const res = await fetch(fileUrl);
-    if (!res.ok) throw new Error("Failed to download file");
-    const arrayBuffer = await res.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    let imageUrlForAI = fileUrl;
 
-    let base64Image = "";
-    let mimeType = "image/png";
+    // // 2. DETECT PDF using fileName (Reliable)
+    // const nameToCheck = fileName || fileUrl;
+    // const isPdf = nameToCheck.toLowerCase().endsWith('.pdf');
 
-    const isPdfHeader = buffer.toString('utf-8', 0, 4) === '%PDF';
-    const isPdfExt = fileUrl.toLowerCase().includes('.pdf');
+    let isPdf = false;
 
-    if (isPdfHeader || isPdfExt) {
-        console.log("PDF detected. Converting to Image (Plan B)...");
+    // 1. Try checking fileName first
+    if (fileName && fileName.toLowerCase().endsWith('.pdf')) {
+        isPdf = true;
+    } 
+    // 2. Fallback: Check the Content-Type header of the URL
+    else {
+        try {
+            const headRes = await fetch(fileUrl, { method: 'HEAD' });
+            const contentType = headRes.headers.get('content-type');
+            if (contentType && contentType.includes('application/pdf')) {
+                isPdf = true;
+            }
+        } catch (e) {
+            console.error("Failed to check Content-Type:", e);
+        }
+    }
+
+    if (isPdf) {
+        console.log("PDF detected. Sending to ConvertAPI...");
         
         try {
-            const pngPages = await pdfToPng(buffer as any, { 
-                disableFontFace: false, 
-                useSystemFonts: false,
-                viewportScale: 2.0,    
-            });
+            const result = await convertapi.convert('png', { 
+                File: fileUrl,
+                PageRange: '1',
+                ScaleImage: 'true',
+                ImageHeight: '1500',
+            },'pdf');
 
-            if (pngPages.length === 0) {
-                throw new Error("PDF conversion returned 0 pages");
-            }
+            imageUrlForAI = (result.response as any).Files[0].Url;
+            console.log("Conversion successful. AI Image URL:", imageUrlForAI);
 
-            if (!pngPages[0].content) {
-                throw new Error("PDF conversion succeeded but returned no image content");
-            }
-
-            base64Image = pngPages[0].content.toString('base64');
-            
         } catch (convError: any) {
-            console.error("PDF Conversion Failed:", convError);
-            throw new Error(`Failed to convert PDF: ${convError.message}`);
+            console.error("ConvertAPI Failed:", convError);
+            return NextResponse.json({ 
+                error: "PDF Conversion failed. Please try uploading an Image (JPG/PNG) instead." 
+            }, { status: 400 });
         }
     } else {
-        console.log("Image detected. Using original buffer.");
-        base64Image = buffer.toString('base64');
-        
-        if (fileUrl.toLowerCase().includes('.jpg') || fileUrl.toLowerCase().includes('.jpeg')) {
-            mimeType = "image/jpeg";
-        } else if (fileUrl.toLowerCase().includes('.webp')) {
-            mimeType = "image/webp";
-        } else if (fileUrl.toLowerCase().includes('.gif')) {
-            mimeType = "image/gif";
-        }
+        console.log("Image detected. Skipping conversion.");
     }
 
-    console.log(`Sending to OpenAI (${mimeType}). Base64 Length: ${base64Image.length}`);
-
-    if (!base64Image || base64Image.length < 100) {
-        throw new Error("Image data is invalid or empty");
-    }
+    // --- SEND TO OPENAI ---
+    console.log("Sending to OpenAI Vision...");
 
     const response = await openai.chat.completions.create({
         model: "gpt-4o",
@@ -88,17 +87,18 @@ export async function POST(req: Request) {
                         {
                           "serviceDate": "ISO Date String (YYYY-MM-DD)",
                           "serviceCenter": "Name of the shop",
-                          "totalCost": Number (numeric only),
+                          "totalCost": Number (numeric only, remove currency symbols),
                           "lineItems": [
                             { "description": "Item Name", "quantity": Number, "unitPrice": Number, "totalPrice": Number, "category": "Part" or "Labor" }
                           ]
                         }
+                        If a field is missing, use reasonable defaults.
                         Do not return markdown formatting (no \`\`\`json). Just the raw JSON string.` 
                     },
                     { 
                         type: "image_url", 
                         image_url: { 
-                            url: `data:${mimeType};base64,${base64Image}` 
+                            url: imageUrlForAI 
                         } 
                     }
                 ],
@@ -114,21 +114,21 @@ export async function POST(req: Request) {
         extractedData = JSON.parse(cleanJson);
     } catch (e) {
         console.error("JSON Parse Error:", cleanJson);
-        throw new Error("AI returned invalid JSON");
+        throw new Error("AI returned invalid JSON. Please upload a clearer image.");
     }
 
-    // Save to Database
+    // --- SAVE TO DB ---
     const invoice = await prisma.invoice.create({
       data: {
         userId: user.id,
         vehicleId,
-        fileUrl,
+        fileUrl, 
         serviceDate: new Date(extractedData.serviceDate || new Date()),
         serviceCenter: extractedData.serviceCenter || "Unknown Center",
         totalCost: Number(extractedData.totalCost) || 0,
         lineItems: {
           create: (extractedData.lineItems || []).map((item: any) => ({
-             description: item.description,
+             description: item.description || "Item",
              quantity: Number(item.quantity) || 1,
              unitPrice: Number(item.unitPrice) || 0,
              totalPrice: Number(item.totalPrice) || 0,
