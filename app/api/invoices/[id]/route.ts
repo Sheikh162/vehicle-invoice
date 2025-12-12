@@ -31,13 +31,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 // DELETE: Remove an invoice and its chat history
 export async function DELETE(
   req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const user = await checkUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const invoiceId = params.id;
+    const invoiceId = (await params).id;
 
     // Verify ownership before deleting
     const invoice = await prisma.invoice.findUnique({
