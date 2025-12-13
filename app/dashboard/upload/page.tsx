@@ -6,10 +6,9 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button'; // Using ShadCN button
-import { Loader2, UploadCloud, X } from 'lucide-react';
-import { UploadDropzone } from "@uploadthing/react"; // 1. Import UploadThing Component
-import type { OurFileRouter } from "@/app/api/uploadthing/core"; // 2. Import Types
+import { Loader2 } from 'lucide-react';
+import { UploadDropzone } from "@uploadthing/react"; 
+import type { OurFileRouter } from "@/app/api/uploadthing/core"; 
 
 function UploadContent() {
   const router = useRouter();
@@ -18,7 +17,6 @@ function UploadContent() {
 
   const [analyzing, setAnalyzing] = useState(false);
 
-  // 3. Helper function that runs AFTER file is uploaded
   const onUploadComplete = async (fileUrl: string, fileName: string) => {
     if (!vehicleId) {
         toast.error("No vehicle selected. Please go back.");
@@ -29,10 +27,10 @@ function UploadContent() {
     const toastId = toast.loading("File uploaded! Analyzing content...");
 
     try {
-      // 4. Send the REAL URL to your Analyze API
       const res = await axios.post('/api/invoices/analyze', { 
-        fileUrl: fileUrl, // <--- REAL URL from UploadThing
-        vehicleId: vehicleId 
+        fileUrl: fileUrl, 
+        vehicleId: vehicleId,
+        fileName: fileName 
       });
 
       toast.success("Analysis Complete!", { id: toastId });
@@ -40,7 +38,16 @@ function UploadContent() {
       
     } catch (error: any) {
       console.error(error);
-      toast.error("Analysis failed. Please try again.", { id: toastId });
+      
+      // 1. Capture the specific error message from the backend
+      const errorMessage = error.response?.data?.error || "Analysis failed. Please try again.";
+      
+      // 2. Show it to the user
+      toast.error(errorMessage, { 
+        id: toastId,
+        duration: 5000 // Keep it visible longer so they can read why it failed
+      });
+      
       setAnalyzing(false); 
     }
   };
@@ -54,14 +61,12 @@ function UploadContent() {
         
         {!analyzing ? (
             <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 hover:bg-gray-50 transition-colors">
-                {/* 5. The UploadThing Dropzone Component */}
                 <UploadDropzone<OurFileRouter, "invoiceUploader">
                     endpoint="invoiceUploader"
                     onClientUploadComplete={(res) => {
                         if (res && res[0]) {
                             const file = res[0];
                             console.log("Upload Completed:", file.ufsUrl);
-                            // Trigger the analysis immediately after upload
                             onUploadComplete(file.ufsUrl, file.name);
                         }
                     }}
@@ -75,12 +80,11 @@ function UploadContent() {
                 />
             </div>
         ) : (
-            // 6. Loading State View
             <div className="flex flex-col items-center justify-center py-12 space-y-4">
                 <Loader2 className="h-10 w-10 animate-spin text-blue-600" />
                 <div className="text-center">
                     <p className="text-lg font-medium">Analyzing Invoice...</p>
-                    <p className="text-sm text-muted-foreground">This may take a few seconds.</p>
+                    <p className="text-sm text-muted-foreground">Checking prices, parts, and labor...</p>
                 </div>
             </div>
         )}
