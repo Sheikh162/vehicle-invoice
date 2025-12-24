@@ -73,8 +73,19 @@ export async function POST(req: Request) {
       GUIDELINES:
       - The "answer" should be helpful and direct.
       - "followUpQuestions" should be 3 specific questions relevant to the invoice (e.g., about high-cost items, labor rates, or warranty).
-      `,
-      generationConfig: { responseMimeType: "application/json" }
+      `,tools: [
+      {
+        // @ts-ignore - The SDK types might not include fileSearch yet, but the API supports it
+        fileSearch: {
+          fileSearchStoreNames: ["fileSearchStores/vehicle-manuals-store-zsa3ou88vstt"]
+        }
+      }
+      ],
+      generationConfig: {
+        //file search incompatible with json output mode  
+        //responseMimeType: "application/json" 
+
+      }
     });
 
     // 5. Start Chat Session with History
@@ -89,7 +100,9 @@ export async function POST(req: Request) {
     // 7. Parse Response
     let aiParsed;
     try {
-        aiParsed = JSON.parse(responseText);
+        // Clean up potential markdown code blocks (common when JSON mode is off)
+        const cleanText = responseText.replace(/```json\n?|\n?```/g, '').trim();
+        aiParsed = JSON.parse(cleanText);
     } catch (e) {
         // Fallback in rare case JSON is broken
         aiParsed = { 
