@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { checkUser } from '@/lib/checkUser';
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { PREDEFINED_QUESTIONS } from '@/lib/constants';
 
 // Initialize Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
@@ -72,12 +73,13 @@ export async function POST(req: Request) {
 
       GUIDELINES:
       - The "answer" should be helpful and direct.
-      - "followUpQuestions" should be 3 specific questions relevant to the invoice (e.g., about high-cost items, labor rates, or warranty).
+      - "followUpQuestions" MUST be selected from the following list. Choose the 3 most relevant questions based on the conversation and invoice context:
+      ${JSON.stringify(PREDEFINED_QUESTIONS)}
       `,tools: [
       {
         // @ts-ignore - The SDK types might not include fileSearch yet, but the API supports it
         fileSearch: {
-          fileSearchStoreNames: ["fileSearchStores/vehicle-manuals-store-zsa3ou88vstt"]
+          fileSearchStoreNames: [process.env.GOOGLE_FILE_SEARCH_STORE_ID!]
         }
       }
       ],
@@ -100,13 +102,20 @@ export async function POST(req: Request) {
     // 7. Parse Response
     let aiParsed;
     try {
-        // Clean up potential markdown code blocks (common when JSON mode is off)
-        const cleanText = responseText.replace(/```json\n?|\n?```/g, '').trim();
-        aiParsed = JSON.parse(cleanText);
+        // Attempt to extract JSON from the response (it might be wrapped in text or markdown)
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            aiParsed = JSON.parse(jsonMatch[0]);
+        } else {
+            // If no JSON structure found, try parsing the whole thing (e.g. if it's just a JSON string)
+            aiParsed = JSON.parse(responseText);
+        }
     } catch (e) {
-        // Fallback in rare case JSON is broken
+        // Fallback: If parsing fails completely, treat the raw text as the answer
+        // Remove markdown code blocks if present to clean it up
+        const cleanText = responseText.replace(/```json\n?|\n?```/g, '').trim();
         aiParsed = { 
-            answer: responseText, 
+            answer: cleanText, 
             followUpQuestions: [] 
         };
     }
